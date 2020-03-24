@@ -4,13 +4,20 @@ CREATE OR REPLACE FUNCTION idoreports_get_sla_ok_percent(
     endtime timestamp with time zone,
     sla_id integer DEFAULT NULL
 )
-    RETURNS float
-    LANGUAGE SQL
+  RETURNS float
+  LANGUAGE plpgsql
 AS $$
---\set id 371
---\set starttime '2019-02-19 00:00:00'
---\set endtime '2019-02-20 10:00:00'
---\set sla_id null
+DECLARE type_id int;
+DECLARE threshold int;
+DECLARE sla float;
+BEGIN
+    SELECT objecttype_id FROM icinga_objects WHERE object_id = id INTO type_id;
+    IF type_id = 1 THEN
+        threshold = 0;
+    ELSE
+        threshold = 1;
+    END IF;
+
 WITH
     before AS (
         -- low border, last event before the range we are looking for:
@@ -22,7 +29,7 @@ WITH
             (
                 SELECT
                     1 AS prio,
-                   state > 1 AS down,
+                   state > threshold AS down,
                    GREATEST(state_time, starttime) AS state_time,
                    state
                 FROM
@@ -39,7 +46,7 @@ WITH
             (
                 SELECT
                     2 AS prio,
-                    state > 1 AS down,
+                    state > threshold AS down,
                     GREATEST(state_time, starttime) AS state_time,
                     state
                 FROM
@@ -60,7 +67,7 @@ WITH
     all_hard_events AS (
         -- the actual range we're looking for:
         SELECT
-            state > 1 AS down,
+            state > threshold AS down,
             state_time,
             state
         FROM
@@ -76,7 +83,7 @@ WITH
         -- the "younger" of the current host/service state and the first recorded event
         (
             SELECT
-                state > 1 AS down,
+                state > threshold AS down,
                 LEAST(state_time, endtime) AS state_time,
                 state
             FROM (
@@ -167,8 +174,8 @@ WITH
 --             ,lead(state_time) OVER w - state_time AS duration
         FROM (
             SELECT
-                state > 1 AS down,
-                lag(state) OVER w > 1 AS next_down,
+                state > threshold AS down,
+                lag(state) OVER w > threshold AS next_down,
                 state_time,
                 state
             FROM
@@ -204,7 +211,10 @@ WITH
 
 --SELECT * FROM effective_downtimes;
 SELECT
-    100.0 - EXTRACT('epoch' FROM SUM(duration)) / EXTRACT('epoch' FROM endtime - starttime ) * 100.0 AS availability
+    100.0 - COALESCE(EXTRACT('epoch' FROM SUM(duration)) / EXTRACT('epoch' FROM endtime - starttime ),0) * 100.0 AS availability
 FROM
-    effective_downtimes;
+    effective_downtimes INTO sla;
+
+RETURN sla;
+END;
 $$;
